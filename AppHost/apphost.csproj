@@ -1,0 +1,22 @@
+<Project Sdk="Aspire.AppHost.Sdk/13.4.0-preview.1.26274.8">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net11.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PackAsTool>true</PackAsTool>
+    <UserSecretsId>apphost-9176cdc6cc8a2de3c01240dacf5fb51e06011671358ac845932a2cb6a27b829d</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Aspire.Hosting.Redis" Version="13.4.0-preview.1.26274.8" />
+    <PackageReference Include="Aspire.Hosting.Valkey" Version="13.4.0-preview.1.26274.8" />
+    <PackageReference Include="Aspire.Hosting.Yarp" Version="13.4.0-preview.1.26274.8" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\LaunchDarklyClient\LaunchDarklyClient.csproj" />
+  </ItemGroup>
+
+</Project>

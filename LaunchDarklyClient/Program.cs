@@ -1,4 +1,4 @@
-using System.Net.Security;
+using System.Reflection;
 using System.Security.Cryptography.X509Certificates;
 using LaunchDarkly.Logging;
 using LaunchDarkly.Observability;
@@ -20,12 +20,12 @@ static string? FromBase64Env(IConfiguration cfg, string key)
     return string.IsNullOrEmpty(b64) ? null : System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(b64));
 }
 
-var caCertPem      = FromBase64Env(builder.Configuration, "VALKEY_CA_CERT_B64");
-var clientCertPem  = FromBase64Env(builder.Configuration, "VALKEY_CLIENT_CERT_B64");
-var clientKeyPem   = FromBase64Env(builder.Configuration, "VALKEY_CLIENT_KEY_B64");
+var caCertPem = FromBase64Env(builder.Configuration, "VALKEY_CA_CERT_B64");
+var clientCertPem = FromBase64Env(builder.Configuration, "VALKEY_CLIENT_CERT_B64");
+var clientKeyPem = FromBase64Env(builder.Configuration, "VALKEY_CLIENT_KEY_B64");
 
 X509Certificate2? valkeyClientCert = null;
-X509Certificate2? valkeyCACert     = null;
+X509Certificate2? valkeyCACert = null;
 
 if (clientCertPem is not null && clientKeyPem is not null)
     valkeyClientCert = X509Certificate2.CreateFromPem(clientCertPem, clientKeyPem);
@@ -35,7 +35,9 @@ if (caCertPem is not null)
 
 
 string applicationName = builder.Configuration["APPLICATION_NAME"] ?? "MyAspireApp";
-string applicationVersion = builder.Configuration["APPLICATION_VERSION"] ?? "1.0.0";
+string applicationVersion = builder.Configuration["APPLICATION_VERSION"] ??
+    Assembly.GetExecutingAssembly().GetName().Version?.ToString() ??
+    "dev";
 
 builder.Services.AddLaunchDarklyObservability(builder.Configuration["LAUNCHDARKLY_SDK_KEY"], cfg =>
         {
@@ -127,6 +129,7 @@ static ConfigurationOptions BuildValkeyConfig(
 
 file class BackgroundFlagPollService(ILdClient ldClient, ILogger<BackgroundFlagPollService> logger) : BackgroundService
 {
+    private const string FlagKey = "TestFlag";
     private readonly ILdClient _ldClient = ldClient;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -134,7 +137,12 @@ file class BackgroundFlagPollService(ILdClient ldClient, ILogger<BackgroundFlagP
         var context = Context.Builder("user-key").Build();
         while (!stoppingToken.IsCancellationRequested)
         {
-            var variationDetail = _ldClient.BoolVariationDetail("TestFlag", context, false);
+            var variationDetail = _ldClient.BoolVariationDetail(FlagKey, context, false);
+            if (logger.IsEnabled(Microsoft.Extensions.Logging.LogLevel.Information))
+                logger.LogInformation("Flag Key: {Key}, Flag value: {Value}, Reason: {Reason}",
+                                      FlagKey,
+                                      variationDetail.Value,
+                                      variationDetail.Reason);
             if (variationDetail.Reason.Kind == EvaluationReasonKind.Error)
             {
                 logger.LogError("Error evaluating flag: {ErrorKind}", variationDetail.Reason.ErrorKind);

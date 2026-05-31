@@ -1,4 +1,4 @@
-<Project Sdk="Aspire.AppHost.Sdk/13.4.0-preview.1.26274.8">
+<Project Sdk="Aspire.AppHost.Sdk/13.5.0-preview.1.26277.21">
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
@@ -10,9 +10,11 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Aspire.Hosting.Redis" Version="13.4.0-preview.1.26274.8" />
-    <PackageReference Include="Aspire.Hosting.Valkey" Version="13.4.0-preview.1.26274.8" />
-    <PackageReference Include="Aspire.Hosting.Yarp" Version="13.4.0-preview.1.26274.8" />
+    <PackageReference Include="AspNetCore.HealthChecks.Redis" Version="9.0.0" />
+    <PackageReference Include="Aspire.Hosting.Redis" Version="13.5.0-preview.1.26277.21" />
+    <PackageReference Include="Aspire.Hosting.Valkey" Version="13.5.0-preview.1.26277.21" />
+    <PackageReference Include="Aspire.Hosting.Yarp" Version="13.5.0-preview.1.26277.21" />
+    <PackageReference Include="StackExchange.Redis" Version="2.13.1" />
   </ItemGroup>
 
   <ItemGroup>

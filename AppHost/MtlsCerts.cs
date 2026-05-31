@@ -30,7 +30,8 @@ public static class MtlsCerts
 
     /// <summary>
     /// Issues a TLS server certificate signed by <paramref name="ca"/>.
-    /// Includes SANs for <c>localhost</c>, <c>valkey</c> (Docker container hostname), and 127.0.0.1.
+    /// SANs cover all hostnames a client might use to reach Valkey:
+    /// the Docker short name, the Aspire <c>.dev.internal</c> FQDN, and loopback aliases.
     /// </summary>
     public static X509Certificate2 IssueServerCert(X509Certificate2 ca)
     {
@@ -48,6 +49,9 @@ public static class MtlsCerts
         var san = new SubjectAlternativeNameBuilder();
         san.AddDnsName("localhost");
         san.AddDnsName("valkey");
+        san.AddDnsName("valkey.dev.internal");
+        san.AddDnsName("redis");
+        san.AddDnsName("redis.dev.internal");
         san.AddIpAddress(System.Net.IPAddress.Loopback);
         req.CertificateExtensions.Add(san.Build());
 

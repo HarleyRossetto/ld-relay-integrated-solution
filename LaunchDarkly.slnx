@@ -1,5 +1,6 @@
 <Solution>
   <Project Path="AppHost/apphost.csproj" />
   <Project Path="LaunchDarklyClient/LaunchDarklyClient.csproj" />
+  <Project Path="LDPersistentTelemetry/LDPersistentTelemetry.csproj" />
   <Project Path="relay-complex.ServiceDefaults/relay-complex.ServiceDefaults.csproj" />
 </Solution>

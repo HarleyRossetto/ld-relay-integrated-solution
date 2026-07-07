@@ -10,47 +10,44 @@ using Projects;
 
 var builder = DistributedApplication.CreateBuilder(args);
 
-// var launchdarklyApiKeyParameter = builder.AddParameter(name: "launchdarkly-api-key", secret: true);
-// var launchdarklyAutoConfigKeyParameter = builder.AddParameter(name: "launchdarkly-auto-config", secret: true);
 var launchdarklySdkKeyParameter = builder.AddParameter(name: "launchdarkly-sdk-key", secret: true);
+var launchdarklyRelayAutoConfigKeyParameter = builder.AddParameter(name: "launchdarkly-relay-auto-config", secret: true);
 var launchdarklyEnvironmentIdParameter = builder.AddParameter(name: "launchdarkly-environment");
 
 // Generate ephemeral mTLS certs and ACL credentials for Valkey.
 // All certs are CA-signed and regenerated on every run.
-var ca = MtlsCerts.GenerateCA();
-var serverCert = MtlsCerts.IssueServerCert(ca);
-var ldclientCert = MtlsCerts.IssueClientCert(ca, "ldclient");
-var insightsCert = MtlsCerts.IssueClientCert(ca, "redisinsight");
-
-var caPem = MtlsCerts.ExportPem(ca);
-var serverPem = MtlsCerts.ExportPem(serverCert);
-var ldclientPem = MtlsCerts.ExportPem(ldclientCert);
-var insightsPem = MtlsCerts.ExportPem(insightsCert);
+var mtlsCertificateAuthority = MtlsCerts.GenerateCertificateAuthority("valkey-ca");
+var redisCert = mtlsCertificateAuthority.IssueServerCert("redis", ["redis", "localhost", "redis.dev.internal"], [System.Net.IPAddress.Loopback]);
+// var ldclientCert = MtlsCerts.IssueClientCert(mtlsCertificateAuthority, "ldclient.commonname");
+var ldClientCert = mtlsCertificateAuthority.IssueClientCert("ldclient.commonname");
+var insightsCert = mtlsCertificateAuthority.IssueClientCert("redisinsight.commonname");
 
 // Build the CA trust collection for Aspire's certificate distribution API.
-// Pass public-cert-only — the private signing key must never leave MtlsCerts.
-var caBundle = builder.AddCertificateAuthorityCollection("valkey-ca")
-    .WithCertificates(new X509Certificate2Collection(X509CertificateLoader.LoadCertificate(ca.RawData)));
+var customMtlsCaBundle = builder.AddCertificateAuthorityCollection("valkey-ca")
+    .WithCertificates(new X509Certificate2Collection(mtlsCertificateAuthority));
+
+// LaunchDarkly External Service
+var externalLaunchDarklyStream = builder.AddExternalService("launchdarkly-stream", new Uri("https://stream.launchdarkly.com"));
+var externalLaunchDarklyEvents = builder.AddExternalService("launchdarkly-events", new Uri("https://events.launchdarkly.com"));
+
+// TODO: Review Garnet and verify performance vs Valkey/Redis
+//       https://github.com/microsoft/garnet
+// var cache = builder.AddGarnet("cache");
 
 // Random password for the relay ACL user (relay connects without a client cert).
 var relayPassword = Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
 
-// LaunchDarkly External Service
-var externalLaunchDarklyStream = builder.AddExternalService("launchdarkly-stream", new Uri("https://stream.launchdarkly.com"));
-// var externalLaunchDarklyPoll = builder.AddExternalService("launchdarkly-poll", new Uri("https://app.launchdarkly.com"));
-var externalLaunchDarklyEvents = builder.AddExternalService("launchdarkly-events", new Uri("https://events.launchdarkly.com"));
-
-// REDIS_HOST / REDIS_PORT env vars that both ld-relay and LaunchDarklyClient read.
 var valkey = builder.AddValkey("redis")
+    .WithDataVolume()
+    .WithPersistence(interval: TimeSpan.FromMinutes(5), keysChangedThreshold: 100)
     .WithContainerFiles("/certs",
         async (context, cancellationToken) =>
         {
-            await Task.CompletedTask;
             return
             [
-                new ContainerFile { Name = "ca.crt",     Contents = caPem.CertPem },
-                new ContainerFile { Name = "server.crt", Contents = serverPem.CertPem },
-                new ContainerFile { Name = "server.key", Contents = serverPem.KeyPem },
+                new ContainerFile { Name = "ca.crt",     Contents = mtlsCertificateAuthority.ExportCertificatePem() },
+                new ContainerFile { Name = "server.crt", Contents = redisCert.ExportCertificatePem() },
+                new ContainerFile { Name = "server.key", Contents = redisCert.ExportPrivateKeyPem() },
             ];
         })
     .WithContainerFiles("/etc/valkey",
@@ -66,10 +63,23 @@ var valkey = builder.AddValkey("redis")
                     Name = "valkey.conf",
                     Contents =
                         """
+                        loglevel debug
                         # Disable plaintext port; serve TLS only on 6379
                         port 0
                         tls-port 6379
                         tls-replication no
+
+                        # Close the connection after client has been idle for N seconds. 0 to disable.
+                        timeout 0
+
+                        # User data, including keys, values, client names, and ACL usernames, can be
+                        # logged as part of assertions and other error cases. To prevent sensitive user
+                        # information, such as PII, from being recorded in the server log file, this
+                        # user data is hidden from the log by default. If you need to log user data for
+                        # debugging or troubleshooting purposes, you can disable this feature by
+                        # changing the config value to no.
+                        # With this set to yes Valkey will log messages like: TLS: Auto-authenticated client as *redacted*
+                        hide-user-data-from-log no
 
                         # Client certs are optional: relay connects with password only,
                         # client apps connect with a cert whose CN is their ACL username.
@@ -86,16 +96,26 @@ var valkey = builder.AddValkey("redis")
                 new ContainerFile
                 {
                     Name = "users.acl",
+                        // user default off nopass nocommands resetkeys resetchannels
                     Contents =
                         $"""
-                        user default off nopass nocommands resetkeys resetchannels
                         user relay on >{relayPassword} ~* +@all
-                        user ldclient on nopass ~{envId}* +@all
-                        user redisinsight on nopass ~* +@all
+                        user ldclient.commonname on nopass ~{envId}* +@all
+                        user redisinsight.commonname on nopass ~* +@all
                         """
                 },
             ];
         });
+// .WithValkeyAdmin();
+
+builder.AddProject<LDPersistentTelemetry>("ld-persistent-telemetry-sidecar")
+    .WithCertificateAuthorityCollection(customMtlsCaBundle)
+    .WaitFor(valkey)
+    .WithReference(valkey)
+    .WithEnvironment("REDIS_USER", "relay")
+    .WithEnvironment("RelayProxyAutoConfigCache__AutoConfigCacheKey", "AutoConfigCacheKey")
+    .WithEnvironment("RelayProxyAutoConfigCache__EncryptionKey", launchdarklyRelayAutoConfigKeyParameter)
+    .WithOtlpExporter();
 
 // Aspire's AddValkey generates: /bin/sh -c "valkey-server --requirepass $VALKEY_PASSWORD"
 // Appending WithArgs would add our config path as $0 to the shell (a no-op for valkey).
@@ -138,7 +158,7 @@ builder.Services.AddHealthChecks().AddRedis(
             if (cert is null) return false;
             using var chain = new X509Chain();
             chain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
-            chain.ChainPolicy.CustomTrustStore.Add(ca);
+            chain.ChainPolicy.CustomTrustStore.Add(mtlsCertificateAuthority);
             chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
             return chain.Build(
                 X509CertificateLoader.LoadCertificate(cert.Export(X509ContentType.Cert)));
@@ -150,7 +170,7 @@ valkey.WithHealthCheck(valkeyHealthCheckKey);
 
 #pragma warning disable ASPIRECERTIFICATES001
 var redisInsight = builder.AddContainer("redisinsight", "redislabs/redisinsight:latest")
-    .WithEnvironment("RI_ACCEPT_TERMS_AND_CONDITIONS", "true")
+    .WithEnvironment("RI_ACCEPT_TERMS_AND_CONDITIONS", "true") // Don't prompt to accept T&C on each start-up
     .WithEnvironment("RI_PRE_SETUP_DATABASES_PATH", "/ri-config/databases.json")
     .WithEnvironment("RI_STDOUT_LOGGER", "true")
     .WithContainerFiles("/ri-config",
@@ -168,12 +188,12 @@ var redisInsight = builder.AddContainer("redisinsight", "redislabs/redisinsight:
                     name = valkey.Resource.Name,
                     tls = true,
                     verifyServerCert = true,
-                    username = "redisinsight",
-                    caCert = new { certificate = caPem.CertPem },
+                    username = "redisinsight.commonname",
+                    caCert = new { certificate = mtlsCertificateAuthority.ExportCertificatePem() },
                     clientCert = new
                     {
-                        certificate = insightsPem.CertPem,
-                        key = insightsPem.KeyPem,
+                        certificate = insightsCert.ExportCertificatePem(),
+                        key = insightsCert.ExportPrivateKeyPem(),
                     },
                 },
             };
@@ -190,7 +210,7 @@ var redisInsight = builder.AddContainer("redisinsight", "redislabs/redisinsight:
         callback: static endpoint =>
         {
             endpoint.Transport = "http";
-            endpoint.UriScheme = "http";
+            endpoint.UriScheme = "https";
             endpoint.TargetPort = 5540;
         })
     .WithRelationship(valkey, "RedisInsight")
@@ -202,9 +222,9 @@ var redisInsight = builder.AddContainer("redisinsight", "redislabs/redisinsight:
 
         if (ctx.Password != null)
         {
-            var resourceLogger = ctx.ExecutionContext.ServiceProvider.GetRequiredService<ResourceLoggerService>();
+            var resourceLogger = ctx.ExecutionContext.Services.GetRequiredService<ResourceLoggerService>();
             var logger = resourceLogger.GetLogger(ctx.Resource);
-            logger.LogError($"Cannot configure an encrypted certificate for redis insight resource '{ctx.Resource.Name}'");
+            logger.LogError("Cannot configure an encrypted certificate for redis insight resource '{resourceName}'", ctx.Resource.Name);
         }
 
         return Task.CompletedTask;
@@ -212,32 +232,9 @@ var redisInsight = builder.AddContainer("redisinsight", "redislabs/redisinsight:
     .WithCertificateTrustScope(CertificateTrustScope.System)
     .ExcludeFromManifest();
 
-builder.Eventing.Subscribe<BeforeStartEvent>((@event, cancellationToken) =>
-        {
-            var developerCertificateService = @event.Services.GetRequiredService<IDeveloperCertificateService>();
-
-            bool addHttps = false;
-            if (!redisInsight.Resource.TryGetLastAnnotation<HttpsCertificateAnnotation>(out var annotation))
-            {
-                if (developerCertificateService.UseForHttps)
-                {
-                    addHttps = true;
-                }
-            }
-            else if (annotation.UseDeveloperCertificate.GetValueOrDefault(developerCertificateService.UseForHttps) || annotation.UseDeveloperCertificate is not null)
-            {
-                addHttps = true;
-            }
-
-            if (addHttps)
-            {
-                // If a TLS certificate is confugured, ensure the endpoint uses https UriScheme
-                redisInsight.WithEndpoint("http", ep => ep.UriScheme = "https");
-            }
-
-            return Task.CompletedTask;
-        });
-
+// Vector.io for events aggregation / forwarding. Relay Proxy does not have a robust 
+// events system, so having an intentional events collector can improve the solution.
+// Could potentially be replaced by a traditional OTEL Collector.
 var vector = builder.AddContainer("vector", "timberio/vector:latest-alpine")
     .WithVolume("vector-events-buffer", "/var/lib/vector")
     .WithEnvironment("LAUNCHDARKLY_EVENTS", externalLaunchDarklyEvents)
@@ -380,22 +377,9 @@ var vector = builder.AddContainer("vector", "timberio/vector:latest-alpine")
             ];
         })
 
-    // tls:
-    //   ca_file: /tmp/aspire-ca-bundle.pem
     .WithOtlpExporter(OtlpProtocol.HttpProtobuf)
     .WithCertificateTrustScope(CertificateTrustScope.System)
     .WithEnvironment("OTEL_EXPORTER_OTLP_API_KEY", builder.Configuration["AppHost:OtlpApiKey"] ?? "notfound?")
-    // Aspire sets SSL_CERT_DIR to a colon-separated list of paths, but Vector's statically
-    // linked OpenSSL only accepts a single directory. SSL_CERT_FILE (a plain PEM concat) works
-    // reliably instead. We build the bundle at startup and exec Vector with it set.
-    // .WithEntrypoint("/bin/sh")
-    // .WithArgs("-c",
-    //     "cat /usr/lib/ssl/aspire/certs/*.pem > /tmp/aspire-ca-bundle.pem 2>/dev/null; " +
-    //     "export SSL_CERT_FILE=/tmp/aspire-ca-bundle.pem; " +
-    //     // OTEL_EXPORTER_OTLP_HEADERS is "x-otlp-api-key=VALUE" — extract just VALUE
-    //     // so Vector's http sink can reference it as ${OTEL_EXPORTER_OTLP_API_KEY}.
-    //     "export OTEL_EXPORTER_OTLP_API_KEY=\"${OTEL_EXPORTER_OTLP_HEADERS#*=}\"; " +
-    //     "exec /usr/local/bin/vector --config /etc/vector/vector.yaml")
     .WithEndpoint(endpointName: "api",
          callback: static endpoint =>
          {
@@ -410,9 +394,8 @@ var vector = builder.AddContainer("vector", "timberio/vector:latest-alpine")
              endpoint.UriScheme = "http";
              endpoint.TargetPort = 8888;
          });
-// .WithReference(valkey);
 
-var relayProxy = builder.AddContainer("ld-relay", "launchdarkly/ld-relay:9.0.0-rc.3-static-debian12-nonroot-amd64")
+var relayProxy = builder.AddContainer("ld-relay", "launchdarkly/ld-relay:9.0.0-rc.4-static-debian12-nonroot-amd64")
     .WithReference(valkey)
     .WithContainerFiles("/ldr",
        async (context, cancellationToken) =>
@@ -424,6 +407,11 @@ var relayProxy = builder.AddContainer("ld-relay", "launchdarkly/ld-relay:9.0.0-r
                    HeartbeatInterval = TimeSpan.FromSeconds(90),
                    LogLevel = LaunchDarkly.Relay.LogLevel.Info,
                },
+               AutoConfig = {
+                    // CacheKey = "AutoConfigCacheKey",
+                    Key = $"{await launchdarklyRelayAutoConfigKeyParameter.Resource.GetValueAsync(cancellationToken)}",
+                    EnvDatastorePrefix = "$CID"
+               },
                Events = {
                    SendEvents = false,
                    EventsURI = new Uri("http://localhost/no-where:8888:"), // Prevents ld-relay from sending *any* telemetry.
@@ -432,16 +420,16 @@ var relayProxy = builder.AddContainer("ld-relay", "launchdarkly/ld-relay:9.0.0-r
                    Enabled = true,
                    Protocol = "http"
                },
-               Environment = {
-                   {
-                       "Default Project Test",
-                       new EnvConfig
-                       {
-                           SDKKey = $"{await launchdarklySdkKeyParameter.Resource.GetValueAsync(cancellationToken)}",
-                           Prefix = $"{await launchdarklyEnvironmentIdParameter.Resource.GetValueAsync(cancellationToken)}",
-                       }
-                   }
-               },
+               // Environment = {
+               //     {
+               //         "Default Project Test",
+               //         new EnvConfig
+               //         {
+               //             SDKKey = $"{await launchdarklySdkKeyParameter.Resource.GetValueAsync(cancellationToken)}",
+               //             Prefix = $"{await launchdarklyEnvironmentIdParameter.Resource.GetValueAsync(cancellationToken)}",
+               //         }
+               //     }
+               // },
            };
 
            return [
@@ -457,10 +445,10 @@ var relayProxy = builder.AddContainer("ld-relay", "launchdarkly/ld-relay:9.0.0-r
     .WithEnvironment("REDIS_USERNAME", "relay")
     .WithEnvironment("REDIS_PASSWORD", relayPassword)
     .WithEnvironment("STREAM_URI", externalLaunchDarklyStream)
-    // .WithEnvironment("BASE_URI", externalLaunchDarklyPoll)
+    .WithEnvironment("AUTO_CONFIG_CACHE_KEY", "AutoConfigCacheKey")
     // Use Aspire's CA trust API to distribute the Valkey CA to ld-relay.
     // Aspire sets SSL_CERT_DIR in the container; Go's crypto/x509 reads it on Linux.
-    .WithCertificateAuthorityCollection(caBundle)
+    .WithCertificateAuthorityCollection(customMtlsCaBundle)
     .WithEndpoint(endpointName: "http",
          callback: static endpoint =>
          {
@@ -470,6 +458,9 @@ var relayProxy = builder.AddContainer("ld-relay", "launchdarkly/ld-relay:9.0.0-r
          })
    .WithOtlpExporter();
 
+// TODO: Add Prometheus and Grafana extensions for visualisting/creating observability dashboards
+// builder.AddPrometheus();
+// builder.AddGrafana();
 
 // YARP is the single ingress on port 8030.
 // Event paths are routed directly to Vector for durable forwarding with disk buffering and retries.
@@ -479,7 +470,6 @@ var relayHttpEndpoint = relayProxy.GetEndpoint("http");
 
 var yarp = builder.AddYarp("gateway")
     .WithHostPort(8030)
-    // .WaitFor(relayProxy)
     .WithConfiguration(yarp =>
     {
         // LD analytics & diagnostic event endpoints → Vector
@@ -493,25 +483,23 @@ var yarp = builder.AddYarp("gateway")
         yarp.AddRoute("/{**catch-all}", relayHttpEndpoint);
     })
     .WithOtlpExporter()
-    .WithEndpoint(endpointName: "http",
-                  callback: static endpoint =>
-                  {
-                      endpoint.Transport = "http";
-                      endpoint.UriScheme = "http";
-                      endpoint.TargetPort = 8030;
-                  });
+    .WithEndpoint(endpointName: "http", callback: static endpoint =>
+    {
+        endpoint.Transport = "http";
+        endpoint.UriScheme = "https";
+        endpoint.TargetPort = 8030;
+    });
 
 builder.AddProject<LaunchDarklyClient>("launchdarkly-app")
     .WithReference(valkey)
     .WithReference(yarp)
-    // .WaitFor(yarp)
+    .WaitFor(yarp)
     .WithEnvironment("LAUNCHDARKLY_SDK_KEY", launchdarklySdkKeyParameter)
     .WithEnvironment("REDIS_KEY_PREFIX", launchdarklyEnvironmentIdParameter)
     // Clear Aspire-injected password; ldclient authenticates via mTLS cert CN instead.
     .WithEnvironment("REDIS_PASSWORD", "")
-    .WithEnvironment("VALKEY_CA_CERT_B64", Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(caPem.CertPem)))
-    .WithEnvironment("VALKEY_CLIENT_CERT_B64", Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(ldclientPem.CertPem)))
-    .WithEnvironment("VALKEY_CLIENT_KEY_B64", Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(ldclientPem.KeyPem)));
-
+    .WithCertificateAuthorityCollection(customMtlsCaBundle) // Give the app our mTLS Certificate Authority certs
+    .WithEnvironment("VALKEY_CLIENT_CERT_B64", Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(ldClientCert.ExportCertificatePem())))
+    .WithEnvironment("VALKEY_CLIENT_KEY_B64", Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(ldClientCert.ExportPrivateKeyPem())));
 
 builder.Build().Run();

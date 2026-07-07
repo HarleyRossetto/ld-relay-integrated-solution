@@ -10,6 +10,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Aspire.Hosting.Garnet" Version="13.5.0-preview.1.26352.2" />
     <PackageReference Include="AspNetCore.HealthChecks.Redis" Version="9.0.0" />
     <PackageReference Include="Aspire.Hosting.Redis" Version="13.5.0-preview.1.26277.21" />
     <PackageReference Include="Aspire.Hosting.Valkey" Version="13.5.0-preview.1.26277.21" />
@@ -19,6 +20,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\LaunchDarklyClient\LaunchDarklyClient.csproj" />
+    <ProjectReference Include="..\LDPersistentTelemetry\LDPersistentTelemetry.csproj" />
   </ItemGroup>
 
 </Project>

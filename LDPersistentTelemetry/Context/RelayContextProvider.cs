@@ -32,10 +32,14 @@ public class RedisAutoConfigContextProvider(IConnectionMultiplexer redisConnecti
     {
         if (_logger.IsEnabled(LogLevel.Information))
         {
+            var partialkey = optionsMonitor.CurrentValue.EncryptionKey.Length > 4
+                ? optionsMonitor.CurrentValue.EncryptionKey[^4..]
+                : optionsMonitor.CurrentValue.EncryptionKey;
+
             _logger.LogInformation(
                 "Fetching relay context from Redis cache with key `{CacheKey}`, decrypting with key ending in `{DecryptionKey}`.",
                 optionsMonitor.CurrentValue.AutoConfigCacheKey,
-                optionsMonitor.CurrentValue.EncryptionKey[^4..]);
+                partialkey);
         }
 
         var db = redisConnection.GetDatabase();

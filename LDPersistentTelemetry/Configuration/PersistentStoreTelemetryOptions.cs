@@ -24,10 +24,4 @@ public class PersistentStoreTelemetryOptions
     /// </summary>
     public int EnvironmentKeyUsagePageSize { get; set; } = 15000;
 
-    public string ClientCertPath { get; set; } = string.Empty;
-    public string ClientCertPassword { get; set; } = string.Empty;
-
-    public string ClientPemString { get; set; } = string.Empty;
-    public string ClientKeyString { get; set; } = string.Empty;
-
 }

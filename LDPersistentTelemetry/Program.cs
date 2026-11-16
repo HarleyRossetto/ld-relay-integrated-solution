@@ -1,3 +1,4 @@
+using LDPersistentTelemetry.Configuration;
 using OpenTelemetry.Metrics;
 using OpenTelemetry;
 using LDPersistentTelemetry.Context;
@@ -32,27 +33,23 @@ if (OtlpEndpoint != null)
 
 builder.Services.AddOptions<RedisAutoConfigOptions>()
     .Bind(builder.Configuration.GetSection(RedisAutoConfigOptions.Section));
+builder.Services.AddOptions<PersistentStoreTelemetryOptions>()
+    .Bind(builder.Configuration.GetSection(PersistentStoreTelemetryOptions.Section))
+    .Validate(options => options.ScrapeInterval > TimeSpan.Zero, "ScrapeInterval must be positive.")
+    .ValidateOnStart();
 builder.Services.AddSingleton<IRelayContextProvider, RedisAutoConfigContextProvider>();
+
+var redisMtlsOptions = builder.Configuration
+    .GetSection(RedisMtlsOptions.SectionName)
+    .Get<RedisMtlsOptions>() ?? new RedisMtlsOptions();
+using var redisMtlsConfiguration = new RedisMtlsConfiguration(
+    redisMtlsOptions,
+    builder.Environment.ContentRootPath);
 
 builder.AddRedisClient(
     "redis",
     redisSettings => { },
-    configOptions =>
-    {
-        configOptions.AllowAdmin = true;
-        configOptions.Ssl = true;
-        //     configOptions.CertificateValidation += (_, cert, _, _) =>
-        //     {
-        //         if (cert is null) return false;
-        //         using var chain = new X509Chain();
-        //         chain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
-        //         chain.ChainPolicy.CustomTrustStore.Add(valkeyCACert);
-        //         chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
-        //         return chain.Build(new X509Certificate2(cert));
-        //     };
-    }
-
-);
+    redisMtlsConfiguration.Configure);
 
 builder.Services.AddHostedService<RelayProxyMetricScraper>();
 

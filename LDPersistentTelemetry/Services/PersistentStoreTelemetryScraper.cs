@@ -15,9 +15,6 @@ public sealed class RelayProxyMetricScraper(ILogger<RelayProxyMetricScraper> log
                               IOptionsMonitor<PersistentStoreTelemetryOptions> optionsMonitor) : BackgroundService
 {
 
-    // TODO: Make this configurable via IOptions
-    private readonly TimeSpan _period = TimeSpan.FromSeconds(20);
-
     #region OTLP
     private readonly Meter _meter = meterFactory.Create("ldrelay.persistence", "1.0.0");
     private static readonly ActivitySource MetricScraperSource = new("ldrelay.persistence", "1.0.0");
@@ -68,7 +65,16 @@ public sealed class RelayProxyMetricScraper(ILogger<RelayProxyMetricScraper> log
         logger.LogInformation("Fetching Relay Proxy context");
         _relayContext = await relayContextProvider.GetRelayContextAsync(stoppingToken);
 
-        using var timer = new PeriodicTimer(_period);
+        using var timer = new PeriodicTimer(optionsMonitor.CurrentValue.ScrapeInterval);
+
+        using var optionsChangeRegistration = optionsMonitor.OnChange((newOptions, _) =>
+        {
+            if (logger.IsEnabled(LogLevel.Information))
+            {
+                logger.LogInformation("PersistentStoreTelemetryOptions changed, updating scrape interval to {ScrapeInterval}.", newOptions.ScrapeInterval);
+            }
+            timer.Period = newOptions.ScrapeInterval;
+        });
 
         try
         {

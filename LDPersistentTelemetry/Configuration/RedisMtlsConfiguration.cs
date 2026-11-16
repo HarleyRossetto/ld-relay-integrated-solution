@@ -9,10 +9,12 @@ public sealed class RedisMtlsConfiguration : IDisposable
 {
     private readonly X509Certificate2? _clientCertificate;
     private readonly X509Certificate2? _caCertificate;
+    private readonly X509RevocationMode _revocationMode;
 
     public RedisMtlsConfiguration(RedisMtlsOptions options, string contentRootPath)
     {
         options.Validate();
+        _revocationMode = options.RevocationMode;
 
         if (!options.IsConfigured)
         {
@@ -26,8 +28,8 @@ public sealed class RedisMtlsConfiguration : IDisposable
             clientCertificate = X509Certificate2.CreateFromPemFile(
                 ResolveRequiredPath(options.ClientCertificatePath, "ClientCertificatePath", contentRootPath),
                 ResolveRequiredPath(options.ClientPrivateKeyPath, "ClientPrivateKeyPath", contentRootPath));
-            caCertificate = X509Certificate2.CreateFromPemFile(
-                ResolveRequiredPath(options.CaCertificatePath, "CaCertificatePath", contentRootPath));
+            caCertificate = X509Certificate2.CreateFromPem(File.ReadAllText(
+                ResolveRequiredPath(options.CaCertificatePath, "CaCertificatePath", contentRootPath)));
 
             if (!caCertificate.Extensions.OfType<X509BasicConstraintsExtension>()
                     .Any(extension => extension.CertificateAuthority))
@@ -70,7 +72,7 @@ public sealed class RedisMtlsConfiguration : IDisposable
             using var chain = new X509Chain();
             chain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
             chain.ChainPolicy.CustomTrustStore.Add(_caCertificate);
-            chain.ChainPolicy.RevocationMode = X509RevocationMode.Online;
+            chain.ChainPolicy.RevocationMode = _revocationMode;
             // Require the Redis server certificate to be valid for TLS server authentication.
             chain.ChainPolicy.ApplicationPolicy.Add(new Oid("1.3.6.1.5.5.7.3.1"));
             return chain.Build(serverCertificate);

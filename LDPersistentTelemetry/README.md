@@ -38,6 +38,16 @@ There are two clear methods for dynamically obtaining this information:
 
 1. When the Relay Proxy is configured for Auto-config caching (via `AUTO_CONFIG_CACHE_KEY`) it will cache and encrypt it's configuration into the cache. The intended purpose of this feature is to allow the Relay Proxy to be capable of serving proxy requests in the event it has no network access to LaunchDarkly's servers. This application can leverage this feature to obtain it's configuration context from the cache itself. In order to do this this application needs to be configured with the same `AUTO_CONFIG_CACHE_KEY` and `AUTO_CONFIG_CACHE_KEY_ENCRYPTION_KEY` values as the Relay Proxy. This method is more complex to configure but allows this application to operate as a side-car to a Valkey / Redis instance without any additional dependencies.
 
+## Redis mTLS revocation
+
+When Redis mTLS certificate paths are configured, `Redis:Mtls:RevocationMode` controls server certificate chain revocation checks. Set it in configuration or through `Redis__Mtls__RevocationMode`:
+
+- `Online` (default): check revocation using available network endpoints; the issuing CA must provide reachable revocation information.
+- `Offline`: use cached revocation information only.
+- `NoCheck`: disable revocation checking. Use this only when appropriate, such as with the AppHost's ephemeral development CA, which does not provide revocation endpoints.
+
+Unavailable revocation information can cause chain validation to fail in `Online` or `Offline` mode. This setting does not affect how Redis validates the client certificate, or TLS connections without configured mTLS paths.
+
 ## Scraping Methods
 
 There are numerous ways to obtain the metrics from the Redis / Valkey instance, each with their own advantages and limitations. The concern for Redis / Valkey is the single threaded nature of the server, and the fact that it is a high performance cache. Any method which requires a large number of keys to be scanned or iterated over will have a negative impact on the performance of the cache, and as such should be minimised.

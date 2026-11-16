@@ -1,3 +1,5 @@
+using System.Security.Cryptography.X509Certificates;
+
 namespace LDPersistentTelemetry.Configuration;
 
 public sealed class RedisMtlsOptions
@@ -10,6 +12,8 @@ public sealed class RedisMtlsOptions
 
     public string? CaCertificatePath { get; set; }
 
+    public X509RevocationMode RevocationMode { get; set; } = X509RevocationMode.Online;
+
     public bool IsConfigured =>
         !string.IsNullOrWhiteSpace(ClientCertificatePath) &&
         !string.IsNullOrWhiteSpace(ClientPrivateKeyPath) &&
@@ -17,6 +21,11 @@ public sealed class RedisMtlsOptions
 
     public void Validate()
     {
+        if (!Enum.IsDefined(RevocationMode))
+        {
+            throw new InvalidOperationException("Redis mTLS RevocationMode must be NoCheck, Online, or Offline.");
+        }
+
         var configuredPaths = new[]
         {
             ClientCertificatePath,

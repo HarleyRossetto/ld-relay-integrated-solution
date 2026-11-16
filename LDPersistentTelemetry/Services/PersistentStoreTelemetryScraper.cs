@@ -435,14 +435,40 @@ public sealed class RelayProxyMetricScraper(ILogger<RelayProxyMetricScraper> log
 
         do
         {
-            RedisResult[] result = (RedisResult[])await loaded.EvaluateAsync(ctx.Database, new
+            var evaluationResult = await loaded.EvaluateAsync(ctx.Database, new
             {
                 cursor = (RedisValue)cursor,
                 pageSize = (RedisValue)optionsMonitor.CurrentValue.EnvironmentKeyUsagePageSize
             });
 
+            if (evaluationResult.IsNull || evaluationResult.Resp2Type != ResultType.Array)
+            {
+                logger.LogError("Unexpected result from Lua script for key usage calculation. Expected an array, got {Type}.", evaluationResult.Resp2Type);
+                break;
+            }
+
+            var result = (RedisResult[]?)evaluationResult;
+            if (result is null || result.Length != 2)
+            {
+                logger.LogError("Unexpected result from Lua script for key usage calculation. Expected 2 elements, got {Length}.", result?.Length ?? 0);
+                break;
+            }
+
             cursor = (string)result[0]!;
-            var flat = (RedisResult[])result[1];
+
+            var flatResult = result[1];
+            if (flatResult.IsNull || flatResult.Resp2Type != ResultType.Array)
+            {
+                logger.LogError("Unexpected result format from Lua script for key usage calculation. Expected an array, got {Type}.", flatResult.Resp2Type);
+                break;
+            }
+
+            var flat = (RedisResult[]?)flatResult;
+            if (flat is null)
+            {
+                logger.LogError("Unexpected null result from Lua script for key usage calculation.");
+                break;
+            }
 
             for (int i = 0; i < flat.Length - 1; i += 2)
             {
@@ -493,19 +519,44 @@ public sealed class RelayProxyMetricScraper(ILogger<RelayProxyMetricScraper> log
 
         do
         {
-            var result = (RedisResult[])await loaded.EvaluateAsync(ctx.Database, new
+            var evaluationResult = await loaded.EvaluateAsync(ctx.Database, new
             {
                 cursor = (RedisValue)cursor,
                 pageSize = (RedisValue)optionsMonitor.CurrentValue.BigSegmentKeyUsagePageSize
             });
 
+            if (evaluationResult.IsNull || evaluationResult.Resp2Type != ResultType.Array)
+            {
+                logger.LogError("Unexpected result from Lua script for big segment membership calculation. Expected an array, got {Type}.", evaluationResult.Resp2Type);
+                break;
+            }
+
+            var result = (RedisResult[]?)evaluationResult;
+            if (result is null || result.Length != 2)
+            {
+                logger.LogError("Unexpected result from Lua script for big segment membership calculation. Expected 2 elements, got {Length}.", result?.Length ?? 0);
+                break;
+            }
+
             cursor = (string)result[0]!;
 
-            var flat = (RedisResult[])result[1];
+            var flatResult = result[1];
+            if (flatResult.IsNull || flatResult.Resp2Type != ResultType.Array)
+            {
+                logger.LogError("Unexpected result format from Lua script for big segment membership calculation. Expected an array, got {Type}.", flatResult.Resp2Type);
+                break;
+            }
+
+            var flat = (RedisResult[]?)flatResult;
+            if (flat is null)
+            {
+                logger.LogError("Unexpected null result from Lua script for big segment membership calculation.");
+                break;
+            }
 
             for (int i = 0; i < flat.Length - 1; i += 2)
             {
-                var key = (string)flat[i];
+                var key = (string)flat[i]!;
                 var count = (int)flat[i + 1];
                 totalCounts[key] = totalCounts.TryGetValue(key, out var n) ? n + count : count;
             }
